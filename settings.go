@@ -25,26 +25,31 @@ func (h *MultiOption) Set(value string) error {
 
 // AppSettings is the struct of main configuration
 type AppSettings struct {
-	verbose bool
-	debug   bool
-	stats   bool
+	verbose   bool
+	debug     bool
+	stats     bool
+	exitAfter time.Duration
 
 	splitOutput bool
 
 	inputDummy   MultiOption
 	outputDummy  MultiOption
 	outputStdout bool
+	outputNull   bool
 
 	inputTCP       MultiOption
 	outputTCP      MultiOption
 	outputTCPStats bool
 
-	inputFile  MultiOption
-	outputFile MultiOption
+	inputFile        MultiOption
+	inputFileLoop    bool
+	outputFile       MultiOption
+	outputFileConfig FileOutputConfig
 
 	inputRAW              MultiOption
 	inputRAWEngine        string
 	inputRAWTrackResponse bool
+	inputRAWRealIPHeader  string
 
 	middleware string
 
@@ -70,6 +75,7 @@ func init() {
 	flag.BoolVar(&Settings.verbose, "verbose", false, "Turn on more verbose output")
 	flag.BoolVar(&Settings.debug, "debug", false, "Turn on debug output, shows all intercepted traffic. Works only when with `verbose` flag")
 	flag.BoolVar(&Settings.stats, "stats", false, "Turn on queue stats output")
+	flag.DurationVar(&Settings.exitAfter, "exit-after", 0, "exit after specified duration")
 
 	flag.BoolVar(&Settings.splitOutput, "split-output", false, "By default each output gets same traffic. If set to `true` it splits traffic equally among all outputs.")
 
@@ -78,18 +84,31 @@ func init() {
 
 	flag.BoolVar(&Settings.outputStdout, "output-stdout", false, "Used for testing inputs. Just prints to console data coming from inputs.")
 
+	flag.BoolVar(&Settings.outputNull, "output-null", false, "Used for testing inputs. Drops all requests.")
+
 	flag.Var(&Settings.inputTCP, "input-tcp", "Used for internal communication between Gor instances. Example: \n\t# Receive requests from other Gor instances on 28020 port, and redirect output to staging\n\tgor --input-tcp :28020 --output-http staging.com")
 	flag.Var(&Settings.outputTCP, "output-tcp", "Used for internal communication between Gor instances. Example: \n\t# Listen for requests on 80 port and forward them to other Gor instance on 28020 port\n\tgor --input-raw :80 --output-tcp replay.local:28020")
 	flag.BoolVar(&Settings.outputTCPStats, "output-tcp-stats", false, "Report TCP output queue stats to console every 5 seconds.")
 
 	flag.Var(&Settings.inputFile, "input-file", "Read requests from file: \n\tgor --input-file ./requests.gor --output-http staging.com")
+	flag.BoolVar(&Settings.inputFileLoop, "input-file-loop", false, "Loop input files, useful for performance testing.")
+
 	flag.Var(&Settings.outputFile, "output-file", "Write incoming requests to file: \n\tgor --input-raw :80 --output-file ./requests.gor")
+	flag.DurationVar(&Settings.outputFileConfig.flushInterval, "output-file-flush-interval", time.Minute, "Interval for forcing buffer flush to the file, default: 60s.")
+	flag.BoolVar(&Settings.outputFileConfig.append, "output-file-append", false, "The flushed chunk is appended to existence file or not. ")
+
+	// Set default
+	Settings.outputFileConfig.sizeLimit.Set("32mb")
+	flag.Var(&Settings.outputFileConfig.sizeLimit, "output-file-size-limit", "Size of each chunk. Default: 32mb")
+	flag.IntVar(&Settings.outputFileConfig.queueLimit, "output-file-queue-limit", 256, "The length of the chunk queue. Default: 256")
 
 	flag.Var(&Settings.inputRAW, "input-raw", "Capture traffic from given port (use RAW sockets and require *sudo* access):\n\t# Capture traffic from 8080 port\n\tgor --input-raw :8080 --output-http staging.com")
 
 	flag.BoolVar(&Settings.inputRAWTrackResponse, "input-raw-track-response", false, "If turned on Gor will track responses in addition to requests, and they will be available to middleware and file output.")
 
 	flag.StringVar(&Settings.inputRAWEngine, "input-raw-engine", "libpcap", "Intercept traffic using `libpcap` (default), and `raw_socket`")
+
+	flag.StringVar(&Settings.inputRAWRealIPHeader, "input-raw-realip-header", "", "If not blank, injects header with given name and real IP value to the request payload. Usually this header should be named: X-Real-IP")
 
 	flag.StringVar(&Settings.middleware, "middleware", "", "Used for modifying traffic using external command")
 

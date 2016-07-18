@@ -95,13 +95,19 @@ func InitPlugins() {
 		registerPlugin(NewDummyOutput)
 	}
 
+	if Settings.outputNull {
+		registerPlugin(NewNullOutput)
+	}
+
 	engine := EnginePcap
 	if Settings.inputRAWEngine == "raw_socket" {
 		engine = EngineRawSocket
+	} else if Settings.inputRAWEngine == "pcap_file" {
+		engine = EnginePcapFile
 	}
 
 	for _, options := range Settings.inputRAW {
-		registerPlugin(NewRAWInput, options, engine, Settings.inputRAWTrackResponse, time.Duration(0))
+		registerPlugin(NewRAWInput, options, engine, Settings.inputRAWTrackResponse, time.Duration(0), Settings.inputRAWRealIPHeader)
 	}
 
 	for _, options := range Settings.inputTCP {
@@ -113,11 +119,11 @@ func InitPlugins() {
 	}
 
 	for _, options := range Settings.inputFile {
-		registerPlugin(NewFileInput, options)
+		registerPlugin(NewFileInput, options, Settings.inputFileLoop)
 	}
 
 	for _, options := range Settings.outputFile {
-		registerPlugin(NewFileOutput, options)
+		registerPlugin(NewFileOutput, options, &Settings.outputFileConfig)
 	}
 
 	for _, options := range Settings.inputHTTP {

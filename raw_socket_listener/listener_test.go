@@ -108,9 +108,7 @@ func TestRawListenerResponse(t *testing.T) {
 	}
 }
 
-func TestRawListener100Continue(t *testing.T) {
-	var req, resp *TCPMessage
-
+func TestShort100Continue(t *testing.T) {
 	listener := NewListener("", "0", EnginePcap, true, 10*time.Millisecond)
 	defer listener.Close()
 
@@ -119,55 +117,18 @@ func TestRawListener100Continue(t *testing.T) {
 	reqPacket2 := buildPacket(true, 2, reqPacket1.Seq+uint32(len(reqPacket1.Data)), []byte("a"))
 	reqPacket3 := buildPacket(true, 2, reqPacket2.Seq+1, []byte("b"))
 
-	respPacket1 := buildPacket(false, 10, 3, []byte("HTTP/1.1 100 Continue\r\n"))
+	respPacket1 := buildPacket(false, 10, 3, []byte("HTTP/1.1 100 Continue\r\n\r\n"))
 
 	// panic(int(uint32(len(reqPacket1.Data)) + uint32(len(reqPacket2.Data)) + uint32(len(reqPacket3.Data))))
-	respPacket2 := buildPacket(false, reqPacket3.Seq+1 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n"))
+	respPacket2 := buildPacket(false, reqPacket3.Seq+1 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n\r\n"))
 
-	listener.packetsChan <- reqPacket1.Dump()
-	listener.packetsChan <- reqPacket2.Dump()
-	listener.packetsChan <- reqPacket3.Dump()
+	result := []byte("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")
 
-	listener.packetsChan <- respPacket1.Dump()
-	listener.packetsChan <- respPacket2.Dump()
-
-	select {
-	case req = <-listener.messagesChan:
-		break
-	case <-time.After(11 * time.Millisecond):
-		t.Error("Should return request after expire time")
-		return
-	}
-
-	if !bytes.Equal(req.Bytes(), []byte("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")) {
-		t.Error("Should receive full message", string(req.Bytes()))
-	}
-
-	if !req.IsIncoming {
-		t.Error("Should be request")
-	}
-
-	select {
-	case resp = <-listener.messagesChan:
-		break
-	case <-time.After(21 * time.Millisecond):
-		t.Error("Should return response after expire time")
-		return
-	}
-
-	if resp.IsIncoming {
-		t.Error("Should be response")
-	}
-
-	if !bytes.Equal(resp.UUID(), req.UUID()) {
-		t.Error("Resp and Req UUID should be equal")
-	}
+	testRawListener100Continue(t, listener, result, reqPacket1, reqPacket2, reqPacket3, respPacket1, respPacket2)
 }
 
 // Response comes before Request
-func TestRawListener100ContinueWrongOrder(t *testing.T) {
-	var req, resp *TCPMessage
-
+func Test100ContinueWrongOrder(t *testing.T) {
 	listener := NewListener("", "0", EnginePcap, true, 10*time.Millisecond)
 	defer listener.Close()
 
@@ -179,14 +140,37 @@ func TestRawListener100ContinueWrongOrder(t *testing.T) {
 	respPacket1 := buildPacket(false, 10, 3, []byte("HTTP/1.1 100 Continue\r\n"))
 
 	// panic(int(uint32(len(reqPacket1.Data)) + uint32(len(reqPacket2.Data)) + uint32(len(reqPacket3.Data))))
-	respPacket2 := buildPacket(false, reqPacket3.Seq+1 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n"))
+	respPacket2 := buildPacket(false, reqPacket3.Seq+1 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n\r\n"))
 
-	listener.packetsChan <- respPacket1.Dump()
-	listener.packetsChan <- respPacket2.Dump()
+	result := []byte("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")
 
-	listener.packetsChan <- reqPacket1.Dump()
-	listener.packetsChan <- reqPacket2.Dump()
-	listener.packetsChan <- reqPacket3.Dump()
+	testRawListener100Continue(t, listener, result, respPacket1, respPacket2, reqPacket1, reqPacket2, reqPacket3)
+}
+
+func TestAlt100ContinueHeaderOrder(t *testing.T) {
+	listener := NewListener("", "0", EnginePcap, true, 10*time.Millisecond)
+	defer listener.Close()
+
+	reqPacket1 := buildPacket(true, 1, 1, []byte("POST / HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\n"))
+	// Packet with data have different Seq
+	reqPacket2 := buildPacket(true, 2, reqPacket1.Seq+uint32(len(reqPacket1.Data)), []byte("a"))
+	reqPacket3 := buildPacket(true, 2, reqPacket2.Seq+1, []byte("b"))
+
+	respPacket1 := buildPacket(false, 10, 3, []byte("HTTP/1.1 100 Continue\r\n"))
+
+	// panic(int(uint32(len(reqPacket1.Data)) + uint32(len(reqPacket2.Data)) + uint32(len(reqPacket3.Data))))
+	respPacket2 := buildPacket(false, reqPacket3.Seq+1 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+	result := []byte("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")
+
+	testRawListener100Continue(t, listener, result, reqPacket1, reqPacket2, reqPacket3, respPacket1, respPacket2)
+}
+
+func testRawListener100Continue(t *testing.T, listener *Listener, result []byte, packets ...*TCPPacket) {
+	var req, resp *TCPMessage
+	for _, p := range packets {
+		listener.packetsChan <- p.Dump()
+	}
 
 	select {
 	case req = <-listener.messagesChan:
@@ -196,7 +180,7 @@ func TestRawListener100ContinueWrongOrder(t *testing.T) {
 		return
 	}
 
-	if !bytes.Equal(req.Bytes(), []byte("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")) {
+	if !bytes.Equal(req.Bytes(), result) {
 		t.Error("Should receive full message", string(req.Bytes()))
 	}
 
@@ -334,17 +318,17 @@ func TestRawListenerChunkedWrongOrder(t *testing.T) {
 	reqPacket3 := buildPacket(true, 2, reqPacket2.Seq+uint32(len(reqPacket2.Data)), []byte("1\r\nb\r\n"))
 	reqPacket4 := buildPacket(true, 2, reqPacket3.Seq+uint32(len(reqPacket3.Data)), []byte("0\r\n\r\n"))
 
-	respPacket1 := buildPacket(false, 10, 3, []byte("HTTP/1.1 100 Continue\r\n"))
+	respPacket1 := buildPacket(false, 10, 3, []byte("HTTP/1.1 100 Continue\r\n\r\n"))
 
 	// panic(int(uint32(len(reqPacket1.Data)) + uint32(len(reqPacket2.Data)) + uint32(len(reqPacket3.Data))))
-	respPacket2 := buildPacket(false, reqPacket4.Seq+5 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n"))
+	respPacket2 := buildPacket(false, reqPacket4.Seq+5 /* len of data */, 2, []byte("HTTP/1.1 200 OK\r\n\r\n"))
 
 	// Should re-construct message from all possible combinations
 	for i := 0; i < 6*5*4*3*2*1; i++ {
 
-		if i < 54 || i > 57 {
-			continue
-		}
+		// if i < 54 || i > 57 {
+		// 	continue
+		// }
 
 		packets := permutation(i, []*TCPPacket{reqPacket1, reqPacket2, reqPacket3, reqPacket4, respPacket1, respPacket2})
 
@@ -363,7 +347,7 @@ func chunkedPostMessage() []*TCPPacket {
 	reqPacket3 := buildPacket(true, ack, reqPacket2.Seq+5, []byte("1\r\nb\r\n"))
 	reqPacket4 := buildPacket(true, ack, reqPacket3.Seq+5, []byte("0\r\n\r\n"))
 
-	respPacket := buildPacket(false, reqPacket4.Seq+5 /* len of data */, ack, []byte("HTTP/1.1 200 OK\r\n"))
+	respPacket := buildPacket(false, reqPacket4.Seq+5 /* len of data */, ack, []byte("HTTP/1.1 200 OK\r\n\r\n"))
 
 	return []*TCPPacket{
 		reqPacket1, reqPacket2, reqPacket3, reqPacket4, respPacket,
@@ -386,7 +370,7 @@ func postMessage() []*TCPPacket {
 
 	return []*TCPPacket{
 		buildPacket(true, ack, seq, data),
-		buildPacket(false, seq+uint32(len(data)), seq2, []byte("HTTP/1.1 200 OK\r\n")),
+		buildPacket(false, seq+uint32(len(data)), seq2, []byte("HTTP/1.1 200 OK\r\n\r\n")),
 	}
 }
 
@@ -397,7 +381,7 @@ func getMessage() []*TCPPacket {
 
 	return []*TCPPacket{
 		buildPacket(true, ack, seq, []byte("GET / HTTP/1.1\r\n\r\n")),
-		buildPacket(false, seq+18, seq2, []byte("HTTP/1.1 200 OK\r\n")),
+		buildPacket(false, seq+18, seq2, []byte("HTTP/1.1 200 OK\r\n\r\n")),
 	}
 }
 

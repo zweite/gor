@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httputil"
 	"os"
 	"os/signal"
 	"runtime"
@@ -22,6 +24,14 @@ var (
 	memprofile = flag.String("memprofile", "", "write memory profile to this file")
 )
 
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rb, _ := httputil.DumpRequest(r, false)
+		log.Println(string(rb))
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	// // Don't exit on panic
 	// defer func() {
@@ -35,10 +45,22 @@ func main() {
 		runtime.GOMAXPROCS(runtime.NumCPU() * 2)
 	}
 
-	fmt.Println("Version:", VERSION)
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "file-server" {
+		if len(args) != 2 {
+			log.Fatal("You should specify port and IP (optional) for the file server. Example: `gor file-server :80`")
+		}
+		dir, _ := os.Getwd()
 
-	flag.Parse()
-	InitPlugins()
+		log.Println("Started example file server for current dirrectory on address ", args[1])
+
+		log.Fatal(http.ListenAndServe(args[1], loggingMiddleware(http.FileServer(http.Dir(dir)))))
+	} else {
+		flag.Parse()
+		InitPlugins()
+	}
+
+	fmt.Println("Version:", VERSION)
 
 	if len(Plugins.Inputs) == 0 || len(Plugins.Outputs) == 0 {
 		log.Fatal("Required at least 1 input and 1 output")
@@ -56,17 +78,31 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-
-		for _, p := range Plugins.All {
-			if cp, ok := p.(io.Closer); ok {
-				cp.Close()
-			}
-		}
-
+		finalize()
 		os.Exit(1)
 	}()
 
-	Start(nil)
+	if Settings.exitAfter > 0 {
+		log.Println("Running gor for a duration of", Settings.exitAfter)
+		closeCh := make(chan int)
+
+		time.AfterFunc(Settings.exitAfter, func() {
+			log.Println("Stopping gor after", Settings.exitAfter)
+			close(closeCh)
+		})
+
+		Start(closeCh)
+	} else {
+		Start(nil)
+	}
+}
+
+func finalize() {
+	for _, p := range Plugins.All {
+		if cp, ok := p.(io.Closer); ok {
+			cp.Close()
+		}
+	}
 }
 
 func profileCPU(cpuprofile string) {
